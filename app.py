@@ -45,6 +45,7 @@ class NotesManager:
         # UI state
         self.selected_file = None
         self.search_query = ''
+        self.selected_tree_node_id = None
         self.tree_nodes = []  # Store tree structure for lookups
         
     def load_config(self):
@@ -219,6 +220,7 @@ def build_left_panel():
             on_change=lambda e: on_search_change(e.value)
         ).props('outlined dense').classes('w-full')
         search_input.props('clearable')
+        search_input.on('keyup', lambda _: on_search_change(search_input.value))
         
         ui.separator()
         
@@ -322,7 +324,7 @@ def resolve_selected_node(selection) -> Optional[dict]:
     return notes_manager.find_node_by_id(node_key) or notes_manager.find_node_by_label(node_key)
 
 
-def on_tree_select(selection):
+def on_tree_select(selection, reset_detail_panel: bool = True):
     """Handle tree node selection."""
     logger.info('Tree selection payload: %r', selection)
 
@@ -333,6 +335,7 @@ def on_tree_select(selection):
     
     # Get files for this selection
     node_id = selected_node.get('id')
+    notes_manager.selected_tree_node_id = node_id
     files = notes_manager.get_files_for_selection(node_id)
     logger.info(
         'Tree node clicked: id=%s, category=%s, subcategory=%s, files_before_filter=%d',
@@ -354,12 +357,13 @@ def on_tree_select(selection):
     # Update file list
     display_file_list(files, category, subcategory)
 
-    # Reset right panel when category changes
-    notes_manager.selected_file = None
-    note_info_label.set_text('Select a file to view content')
-    content_viewer.set_content('')
-    action_buttons.clear()
-    action_buttons.set_visibility(False)
+    if reset_detail_panel:
+        # Reset right panel when category changes
+        notes_manager.selected_file = None
+        note_info_label.set_text('Select a file to view content')
+        content_viewer.set_content('')
+        action_buttons.clear()
+        action_buttons.set_visibility(False)
 
 
 def display_file_list(files: List[str], category: str, subcategory: str = None):
@@ -491,10 +495,17 @@ def open_external(filename: str):
 
 def on_search_change(query: str):
     """Handle search query change."""
-    notes_manager.search_query = query
-    # Refresh current view if something is selected
-    if hasattr(file_tree, 'value') and file_tree.value:
-        on_tree_select(file_tree.value)
+    notes_manager.search_query = (query or '').strip()
+
+    selected_node_id = notes_manager.selected_tree_node_id
+    if selected_node_id:
+        on_tree_select(selected_node_id, reset_detail_panel=False)
+        return
+
+    # Fallback for cases where tree selection exists but wasn't persisted yet
+    tree_value = getattr(file_tree, 'value', None)
+    if tree_value:
+        on_tree_select(tree_value, reset_detail_panel=False)
 
 
 def refresh_app():
