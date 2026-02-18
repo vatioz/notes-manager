@@ -1,6 +1,7 @@
 """Notes Manager - Main Application."""
 
 import json
+import logging
 from pathlib import Path
 from datetime import datetime
 from typing import List, Optional
@@ -9,6 +10,14 @@ from src.models import NotesData
 from src.json_manager import JSONManager
 from src.file_manager import FileManager
 from src.search import SearchEngine
+
+
+logger = logging.getLogger('notes_manager')
+if not logger.handlers:
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s | %(levelname)s | %(name)s | %(message)s'
+    )
 
 
 class NotesManager:
@@ -124,6 +133,20 @@ class NotesManager:
             return None
         
         return search_nodes(self.tree_nodes, node_id)
+
+    def find_node_by_label(self, node_label: str) -> Optional[dict]:
+        """Find a tree node by its display label."""
+        def search_nodes(nodes, target_label):
+            for node in nodes:
+                if node.get('label') == target_label:
+                    return node
+                if 'children' in node:
+                    result = search_nodes(node['children'], target_label)
+                    if result:
+                        return result
+            return None
+
+        return search_nodes(self.tree_nodes, node_label)
     
     def get_files_for_selection(self, node_id: str) -> List[str]:
         """Get files for selected tree node."""
@@ -202,6 +225,7 @@ def build_left_panel():
         tree_data = notes_manager.build_tree_data()
         file_tree = ui.tree(
             tree_data,
+            node_key='id',
             label_key='label',
             on_select=lambda e: on_tree_select(e.value)
         ).classes('w-full')
@@ -264,23 +288,58 @@ def normalize_tree_selection(selection) -> Optional[str]:
     return str(selection)
 
 
+def resolve_selected_node(selection) -> Optional[dict]:
+    """Resolve selected tree payload to a known node from tree data."""
+    if selection is None:
+        return None
+
+    if isinstance(selection, dict):
+        node_id = selection.get('id')
+        if node_id:
+            node = notes_manager.find_node_by_id(node_id)
+            if node:
+                return node
+
+        node_label = selection.get('label')
+        if node_label:
+            return notes_manager.find_node_by_label(node_label)
+
+        return None
+
+    if isinstance(selection, (list, tuple, set)):
+        first_item = next(iter(selection), None)
+        return resolve_selected_node(first_item)
+
+    node_key = normalize_tree_selection(selection)
+    if not node_key:
+        return None
+
+    return notes_manager.find_node_by_id(node_key) or notes_manager.find_node_by_label(node_key)
+
+
 def on_tree_select(selection):
     """Handle tree node selection."""
-    node_id = normalize_tree_selection(selection)
-    if not node_id:
-        return
-    
-    # Find the node by ID
-    selection = notes_manager.find_node_by_id(node_id)
-    if not selection:
+    logger.info('Tree selection payload: %r', selection)
+
+    selected_node = resolve_selected_node(selection)
+    if not selected_node:
+        logger.warning('Could not resolve selected tree node from payload: %r', selection)
         return
     
     # Get files for this selection
+    node_id = selected_node.get('id')
     files = notes_manager.get_files_for_selection(node_id)
+    logger.info(
+        'Tree node clicked: id=%s, category=%s, subcategory=%s, files_before_filter=%d',
+        node_id,
+        selected_node.get('category'),
+        selected_node.get('subcategory'),
+        len(files),
+    )
     
     # Update file info
-    category = selection.get('category', '')
-    subcategory = selection.get('subcategory')
+    category = selected_node.get('category', '')
+    subcategory = selected_node.get('subcategory')
     
     if subcategory:
         file_info_label.set_text(f"📁 {category} / {subcategory} ({len(files)} files)")
@@ -294,10 +353,21 @@ def on_tree_select(selection):
 def display_file_list(files: List[str], category: str, subcategory: str = None):
     """Display list of files."""
     file_list_container.clear()
+
+    original_count = len(files)
     
     # Apply search filter if active
     if notes_manager.search_query:
         files = notes_manager.search_engine.search_filenames(files, notes_manager.search_query)
+
+    logger.info(
+        'Display file list: category=%s, subcategory=%s, files_total=%d, files_after_search=%d, search_query=%r',
+        category,
+        subcategory,
+        original_count,
+        len(files),
+        notes_manager.search_query,
+    )
     
     if not files:
         with file_list_container:
