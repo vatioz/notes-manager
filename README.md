@@ -6,6 +6,7 @@ A web-based application for managing and categorizing notes built with NiceGUI.
 
 - 📁 Browse notes by category and subcategory
 - 🔍 Search files by name
+- 🔎 Optional full-text search inside notes
 - 📄 View file contents (read-only)
 - 🔄 Move files between categories
 - ⚠️ Detect uncategorized files
@@ -39,6 +40,7 @@ python app.py
 - Click on categories in the left panel to view files
 - Click on a file to view its content
 - Use the search box to filter files by name
+- Enable "full text" to search inside note content too
 
 ### Moving Files
 1. Select a file
