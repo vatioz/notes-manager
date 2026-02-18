@@ -20,6 +20,9 @@ if not logger.handlers:
     )
 
 
+ARCHIVE_CATEGORY = 'Archived'
+
+
 class NotesManager:
     """Main application class."""
     
@@ -272,10 +275,11 @@ def build_middle_panel():
 
 def build_right_panel():
     """Build right panel for note content."""
-    global content_viewer, note_info_label, action_buttons
+    global content_viewer, note_title_label, note_category_label, action_buttons
     
     with ui.column().classes('w-full h-full p-2 gap-2'):
-        note_info_label = ui.label('Select a file to view content').classes('text-h6')
+        note_title_label = ui.label('Select a file to view content').classes('text-h6')
+        note_category_label = ui.label('').classes('text-caption text-grey-7')
         
         ui.separator()
 
@@ -373,7 +377,8 @@ def on_tree_select(selection, reset_detail_panel: bool = True):
     if reset_detail_panel:
         # Reset right panel when category changes
         notes_manager.selected_file = None
-        note_info_label.set_text('Select a file to view content')
+        note_title_label.set_text('Select a file to view content')
+        note_category_label.set_text('')
         content_viewer.set_content('')
         action_buttons.clear()
         action_buttons.set_visibility(False)
@@ -444,11 +449,11 @@ def select_file(filename: str, category: str, subcategory: str = None):
         content_viewer.set_content(f"```\n{content}\n```")
         
         # Update note info
-        info_text = f"📄 {filename}\n"
-        info_text += f"Category: {effective_category}"
+        note_title_label.set_text(f"📄 {filename}")
+        category_text = f"Category: {effective_category}"
         if effective_subcategory:
-            info_text += f" / {effective_subcategory}"
-        note_info_label.set_text(info_text)
+            category_text += f" / {effective_subcategory}"
+        note_category_label.set_text(category_text)
         
         # Show action buttons
         show_action_buttons(filename, effective_category, effective_subcategory)
@@ -463,6 +468,13 @@ def show_action_buttons(filename: str, current_category: str, current_subcategor
     action_buttons.set_visibility(True)
     
     with action_buttons:
+        if current_category != ARCHIVE_CATEGORY:
+            ui.button(
+                'Archive',
+                icon='archive',
+                on_click=lambda: archive_file(filename, current_category, current_subcategory)
+            ).props('outline color=orange')
+
         # Move to category dropdown
         categories = notes_manager.data.get_all_categories()
         
@@ -484,9 +496,32 @@ def show_action_buttons(filename: str, current_category: str, current_subcategor
         ).props('outline')
 
 
+def archive_file(filename: str, from_category: str, from_subcategory: str = None):
+    """Move file to the dedicated archive category."""
+    move_file_to_category(filename, from_category, from_subcategory, ARCHIVE_CATEGORY)
+
+
 def move_file_to_category(filename: str, from_category: str, from_subcategory: str, to_category: str):
     """Move file to different category."""
     try:
+        selected_node_id = notes_manager.selected_tree_node_id
+        pre_move_visible_files = []
+        if selected_node_id:
+            pre_move_visible_files = notes_manager.get_files_for_selection(selected_node_id)
+            if notes_manager.search_query:
+                pre_move_visible_files = notes_manager.search_engine.search_filenames(
+                    pre_move_visible_files,
+                    notes_manager.search_query,
+                )
+
+        next_candidate = None
+        if filename in pre_move_visible_files:
+            current_index = pre_move_visible_files.index(filename)
+            remaining_files = [f for f in pre_move_visible_files if f != filename]
+            if remaining_files:
+                next_index = min(current_index, len(remaining_files) - 1)
+                next_candidate = remaining_files[next_index]
+
         # Update data
         notes_manager.data.raw_data = notes_manager.file_manager.move_file_between_categories(
             filename,
@@ -496,14 +531,53 @@ def move_file_to_category(filename: str, from_category: str, from_subcategory: s
             None,  # to_subcategory (always None for now)
             notes_manager.data.raw_data
         )
-        
-        # Save changes
-        notes_manager.json_manager.save(notes_manager.data.raw_data)
+
+        # Save changes (auto-repair stale files dict if sync drift blocks save)
+        try:
+            notes_manager.json_manager.save(notes_manager.data.raw_data)
+        except ValueError as save_error:
+            if 'Sync validation failed' not in str(save_error):
+                raise
+
+            notes_manager.data.raw_data = notes_manager.json_manager.rebuild_files_dict(notes_manager.data.raw_data)
+            notes_manager.json_manager.save(notes_manager.data.raw_data)
+            ui.notify('JSON sync drift detected and repaired automatically.', type='warning')
         
         ui.notify(f"Moved '{filename}' to '{to_category}'", type='positive')
-        
-        # Reload and refresh UI
-        refresh_app()
+
+        notes_manager.reload_data()
+
+        file_tree._props['nodes'] = notes_manager.build_tree_data()
+        file_tree.update()
+
+        if selected_node_id:
+            on_tree_select(selected_node_id, reset_detail_panel=False)
+
+            selected_node = notes_manager.find_node_by_id(selected_node_id)
+            if selected_node:
+                node_category = selected_node.get('category')
+                node_subcategory = selected_node.get('subcategory')
+
+                refreshed_visible_files = notes_manager.get_files_for_selection(selected_node_id)
+                if notes_manager.search_query:
+                    refreshed_visible_files = notes_manager.search_engine.search_filenames(
+                        refreshed_visible_files,
+                        notes_manager.search_query,
+                    )
+
+                if filename in refreshed_visible_files:
+                    select_file(filename, node_category, node_subcategory)
+                elif next_candidate and next_candidate in refreshed_visible_files:
+                    select_file(next_candidate, node_category, node_subcategory)
+                elif refreshed_visible_files:
+                    select_file(refreshed_visible_files[0], node_category, node_subcategory)
+                else:
+                    notes_manager.selected_file = None
+                    note_title_label.set_text('No files in current view')
+                    note_category_label.set_text('')
+                    content_viewer.set_content('')
+                    action_buttons.clear()
+                    action_buttons.set_visibility(False)
         
     except Exception as e:
         ui.notify(f"Error moving file: {e}", type='negative')

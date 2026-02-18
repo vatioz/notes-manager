@@ -28,6 +28,13 @@ class JSONManager:
     
     def save(self, data: Dict[str, Any]) -> None:
         """Save JSON with backup and validation."""
+        data.setdefault('categories', {})
+        data.setdefault('files', {})
+        data.setdefault('summary', {})
+
+        # Keep files dict synchronized from categories (categories are source of truth)
+        data = self.rebuild_files_dict(data)
+
         # 1. Validate sync before saving
         errors = self.validate_sync(data)
         if errors:
@@ -50,6 +57,7 @@ class JSONManager:
         shutil.move(str(temp_path), str(self.json_path))
         
         # 6. Update metadata
+        data.setdefault('metadata', {})
         data['metadata']['last_modified'] = datetime.now().isoformat()
         
         # 7. Clean old backups
@@ -83,64 +91,25 @@ class JSONManager:
         errors = []
         categories = data.get('categories', {})
         files_dict = data.get('files', {})
-        
-        # Track all files found in categories
+
+        if not isinstance(files_dict, dict):
+            errors.append("Top-level 'files' section must be an object")
+            return errors
+
         files_in_categories = set()
-        
-        # Check each category
-        for category_name, category_data in categories.items():
-            # Check files in main category
-            if 'files' in category_data:
-                for filename in category_data['files']:
+
+        for category_data in categories.values():
+            for filename in category_data.get('files', []):
+                files_in_categories.add(filename)
+
+            for file_list in category_data.get('subcategories', {}).values():
+                for filename in file_list:
                     files_in_categories.add(filename)
-                    
-                    # Check if file exists in files dict
-                    if filename not in files_dict:
-                        errors.append(
-                            f"File '{filename}' in category '{category_name}' "
-                            f"but not in files dict"
-                        )
-                    else:
-                        # Check if category matches
-                        if files_dict[filename].get('category') != category_name:
-                            errors.append(
-                                f"File '{filename}' category mismatch: "
-                                f"in category '{category_name}' but files dict says "
-                                f"'{files_dict[filename].get('category')}'"
-                            )
-            
-            # Check subcategories
-            if 'subcategories' in category_data:
-                for subcat_name, file_list in category_data['subcategories'].items():
-                    for filename in file_list:
-                        files_in_categories.add(filename)
-                        
-                        # Check if file exists in files dict
-                        if filename not in files_dict:
-                            errors.append(
-                                f"File '{filename}' in {category_name}/{subcat_name} "
-                                f"but not in files dict"
-                            )
-                        else:
-                            # Check if category and subcategory match
-                            file_meta = files_dict[filename]
-                            if file_meta.get('category') != category_name:
-                                errors.append(
-                                    f"File '{filename}' category mismatch in subcategory"
-                                )
-                            if file_meta.get('subcategory') != subcat_name:
-                                errors.append(
-                                    f"File '{filename}' subcategory mismatch: "
-                                    f"in '{subcat_name}' but files dict says "
-                                    f"'{file_meta.get('subcategory')}'"
-                                )
-        
-        # Check that all files in files_dict are in categories
+
+        # files dict must not contain orphan entries
         for filename in files_dict.keys():
             if filename not in files_in_categories:
-                errors.append(
-                    f"File '{filename}' in files dict but not found in any category"
-                )
+                errors.append(f"File '{filename}' in files dict but not found in any category")
         
         return errors
     
@@ -149,6 +118,7 @@ class JSONManager:
         Rebuild files dict from categories (use when sync is broken).
         Returns updated data.
         """
+        existing_files_dict = data.get('files', {}) if isinstance(data.get('files', {}), dict) else {}
         new_files_dict = {}
         categories = data.get('categories', {})
         
@@ -156,19 +126,19 @@ class JSONManager:
             # Process files in main category
             if 'files' in category_data:
                 for filename in category_data['files']:
-                    new_files_dict[filename] = {
-                        'category': category_name,
-                        'subcategory': None
-                    }
+                    file_meta = dict(existing_files_dict.get(filename, {}))
+                    file_meta['category'] = category_name
+                    file_meta['subcategory'] = None
+                    new_files_dict[filename] = file_meta
             
             # Process subcategories
             if 'subcategories' in category_data:
                 for subcat_name, file_list in category_data['subcategories'].items():
                     for filename in file_list:
-                        new_files_dict[filename] = {
-                            'category': category_name,
-                            'subcategory': subcat_name
-                        }
+                        file_meta = dict(existing_files_dict.get(filename, {}))
+                        file_meta['category'] = category_name
+                        file_meta['subcategory'] = subcat_name
+                        new_files_dict[filename] = file_meta
         
         data['files'] = new_files_dict
         return data

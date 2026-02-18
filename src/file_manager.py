@@ -81,6 +81,10 @@ class FileManager:
         Move a file between categories (JSON only, no physical move).
         Returns updated data dict.
         """
+        data.setdefault('categories', {})
+        data.setdefault('files', {})
+        data.setdefault('summary', {})
+
         # 1. Update files dict
         if filename not in data['files']:
             data['files'][filename] = {}
@@ -107,10 +111,11 @@ class FileManager:
         subcategory: Optional[str]
     ) -> None:
         """Remove file from category/subcategory."""
-        if category not in data['categories']:
+        categories = data.setdefault('categories', {})
+        if category not in categories:
             return
         
-        cat_data = data['categories'][category]
+        cat_data = categories[category]
         
         if subcategory:
             # Remove from subcategory
@@ -130,15 +135,16 @@ class FileManager:
         subcategory: Optional[str]
     ) -> None:
         """Add file to category/subcategory."""
-        if category not in data['categories']:
+        categories = data.setdefault('categories', {})
+        if category not in categories:
             # Create category if it doesn't exist
-            data['categories'][category] = {
+            categories[category] = {
                 'description': 'Custom category',
                 'count': 0,
                 'files': []
             }
         
-        cat_data = data['categories'][category]
+        cat_data = categories[category]
         
         if subcategory:
             # Add to subcategory
@@ -160,7 +166,8 @@ class FileManager:
     
     def _update_counts(self, data: dict) -> None:
         """Update file counts for all categories."""
-        for category_name, cat_data in data['categories'].items():
+        categories = data.setdefault('categories', {})
+        for category_name, cat_data in categories.items():
             count = 0
             
             # Count files in main category
@@ -176,5 +183,5 @@ class FileManager:
         
         # Update summary
         if 'summary' in data:
-            total = sum(cat_data.get('count', 0) for cat_data in data['categories'].values())
+            total = sum(cat_data.get('count', 0) for cat_data in categories.values())
             data['summary']['total_files'] = total
