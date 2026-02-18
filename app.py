@@ -69,7 +69,7 @@ class NotesManager:
             self.data = NotesData(raw_data)
             
             # Find uncategorized files
-            files_in_json = set(self.data.files.keys())
+            files_in_json = set(self.data.get_all_categorized_files())
             self.uncategorized = self.file_manager.find_uncategorized_files(files_in_json)
             
         except Exception as e:
@@ -78,7 +78,16 @@ class NotesManager:
     
     def build_tree_data(self) -> List[dict]:
         """Build tree structure for ui.tree."""
-        tree_nodes = []
+        all_files = sorted(self.file_manager.find_all_note_files())
+
+        tree_nodes = [
+            {
+                'id': 'all_files',
+                'label': f"🌐 All files ({len(all_files)})",
+                'icon': 'folder_special',
+                'category': 'all_files',
+            }
+        ]
         
         # Add categorized files
         for category in self.data.get_all_categories():
@@ -162,7 +171,9 @@ class NotesManager:
         category = selection.get('category')
         subcategory = selection.get('subcategory')
         
-        if category == 'uncategorized':
+        if category == 'all_files':
+            return sorted(self.file_manager.find_all_note_files())
+        elif category == 'uncategorized':
             return self.uncategorized
         elif category:
             return self.data.get_all_files_in_category(category, subcategory)
@@ -349,7 +360,9 @@ def on_tree_select(selection, reset_detail_panel: bool = True):
     category = selected_node.get('category', '')
     subcategory = selected_node.get('subcategory')
     
-    if subcategory:
+    if category == 'all_files':
+        file_info_label.set_text(f"🌐 All files ({len(files)} files)")
+    elif subcategory:
         file_info_label.set_text(f"📁 {category} / {subcategory} ({len(files)} files)")
     else:
         file_info_label.set_text(f"📁 {category.replace('_', ' ').title()} ({len(files)} files)")
@@ -407,9 +420,21 @@ def display_file_list(files: List[str], category: str, subcategory: str = None):
 
 def select_file(filename: str, category: str, subcategory: str = None):
     """Select and display a file."""
+    effective_category = category
+    effective_subcategory = subcategory
+
+    if category == 'all_files':
+        file_metadata = notes_manager.data.get_file_metadata(filename)
+        if file_metadata:
+            effective_category = file_metadata.category
+            effective_subcategory = file_metadata.subcategory
+        else:
+            effective_category = 'uncategorized'
+            effective_subcategory = None
+
     notes_manager.selected_file = filename
-    notes_manager.selected_category = category
-    notes_manager.selected_subcategory = subcategory
+    notes_manager.selected_category = effective_category
+    notes_manager.selected_subcategory = effective_subcategory
     
     # Load and display content
     try:
@@ -420,13 +445,13 @@ def select_file(filename: str, category: str, subcategory: str = None):
         
         # Update note info
         info_text = f"📄 {filename}\n"
-        info_text += f"Category: {category}"
-        if subcategory:
-            info_text += f" / {subcategory}"
+        info_text += f"Category: {effective_category}"
+        if effective_subcategory:
+            info_text += f" / {effective_subcategory}"
         note_info_label.set_text(info_text)
         
         # Show action buttons
-        show_action_buttons(filename, category, subcategory)
+        show_action_buttons(filename, effective_category, effective_subcategory)
         
     except Exception as e:
         ui.notify(f"Error reading file: {e}", type='negative')

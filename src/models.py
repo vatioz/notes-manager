@@ -67,10 +67,30 @@ class NotesData:
         return list(self.categories[category].get('subcategories', {}).keys())
     
     def get_file_metadata(self, filename: str) -> Optional[FileMetadata]:
-        """Get metadata for a specific file."""
+        """Get metadata for a specific file, preferring category mappings as source of truth."""
+        for category_name, category_data in self.categories.items():
+            if filename in category_data.get('files', []):
+                file_data = self.files.get(filename, {})
+                return FileMetadata(
+                    category=category_name,
+                    subcategory=None,
+                    last_viewed=file_data.get('last_viewed'),
+                    size_bytes=file_data.get('size_bytes')
+                )
+
+            for subcat_name, file_list in category_data.get('subcategories', {}).items():
+                if filename in file_list:
+                    file_data = self.files.get(filename, {})
+                    return FileMetadata(
+                        category=category_name,
+                        subcategory=subcat_name,
+                        last_viewed=file_data.get('last_viewed'),
+                        size_bytes=file_data.get('size_bytes')
+                    )
+
         if filename not in self.files:
             return None
-        
+
         data = self.files[filename]
         return FileMetadata(
             category=data.get('category', 'unknown'),
@@ -78,3 +98,17 @@ class NotesData:
             last_viewed=data.get('last_viewed'),
             size_bytes=data.get('size_bytes')
         )
+
+    def get_all_categorized_files(self) -> List[str]:
+        """Get all filenames referenced in category and subcategory lists."""
+        categorized = set()
+
+        for category_data in self.categories.values():
+            for filename in category_data.get('files', []):
+                categorized.add(filename)
+
+            for file_list in category_data.get('subcategories', {}).values():
+                for filename in file_list:
+                    categorized.add(filename)
+
+        return sorted(categorized)
