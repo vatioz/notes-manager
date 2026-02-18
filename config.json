@@ -1,0 +1,11 @@
+{
+  "notes_directory": "c:\\Users\\czpekub3\\OneDrive - ABB\\_notes",
+  "json_filename": "notes_categorization.json",
+  "backup_directory": "./backups",
+  "max_backups": 5,
+  "file_extensions": [".txt", ".note", ".md"],
+  "ui": {
+    "theme": "light",
+    "preview_max_lines": 100
+  }
+}
