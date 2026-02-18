@@ -195,15 +195,16 @@ def main_page():
             ui.button(icon='refresh', on_click=lambda: refresh_app()).props('flat')
             ui.button(icon='settings', on_click=lambda: show_settings()).props('flat')
     
-    # Main layout - container to prevent overflow
+    # Main layout - 3 columns: tree | file list | note content
     with ui.element('div').style('width: 100vw; height: calc(100vh - 50px); overflow: hidden'):
-        with ui.splitter(value=25).classes('w-full h-full') as splitter:
-            with splitter.before:
-                # Left panel - Tree navigation
+        with ui.row().classes('w-full h-full').style('gap: 0'):
+            with ui.column().classes('h-full p-2').style('width: 24%; min-width: 260px; overflow: hidden'):
                 build_left_panel()
-            
-            with splitter.after:
-                # Right panel - Content viewer
+
+            with ui.column().classes('h-full p-2').style('width: 28%; min-width: 280px; overflow: hidden'):
+                build_middle_panel()
+
+            with ui.column().classes('h-full p-2').style('flex: 1; min-width: 360px; overflow: hidden'):
                 build_right_panel()
 
 
@@ -243,29 +244,33 @@ def build_left_panel():
             ).classes('text-caption')
 
 
+def build_middle_panel():
+    """Build middle panel for file list."""
+    global file_list_container, file_info_label
+
+    with ui.column().classes('w-full h-full p-2 gap-2'):
+        file_info_label = ui.label('Select a category to view files').classes('text-h6')
+
+        ui.separator()
+
+        with ui.scroll_area().classes('w-full').style('height: 100%'):
+            file_list_container = ui.column().classes('w-full')
+
+
 def build_right_panel():
-    """Build right content panel."""
-    global file_list_container, content_viewer, file_info_label, action_buttons, file_list_scroll
+    """Build right panel for note content."""
+    global content_viewer, note_info_label, action_buttons
     
     with ui.column().classes('w-full h-full p-2 gap-2'):
-        # File info section
-        file_info_label = ui.label('Select a category to view files').classes('text-h6')
+        note_info_label = ui.label('Select a file to view content').classes('text-h6')
         
         ui.separator()
-        
-        # File list (shown when category selected) - max 40% height with scroll
-        with ui.scroll_area().classes('w-full').style('max-height: 40vh') as file_list_scroll:
-            file_list_container = ui.column().classes('w-full')
-        
-        ui.separator()
-        
-        # Content viewer section - takes remaining space
+
+        # Content viewer section
         with ui.column().classes('w-full').style('flex: 1; min-height: 0'):
-            # Action buttons (shown when file selected)
             action_buttons = ui.row().classes('gap-2 mb-2')
             action_buttons.set_visibility(False)
-            
-            # Content viewer with scroll
+
             with ui.scroll_area().classes('w-full border').style('height: 100%'):
                 content_viewer = ui.markdown('').classes('p-4')
 
@@ -349,6 +354,13 @@ def on_tree_select(selection):
     # Update file list
     display_file_list(files, category, subcategory)
 
+    # Reset right panel when category changes
+    notes_manager.selected_file = None
+    note_info_label.set_text('Select a file to view content')
+    content_viewer.set_content('')
+    action_buttons.clear()
+    action_buttons.set_visibility(False)
+
 
 def display_file_list(files: List[str], category: str, subcategory: str = None):
     """Display list of files."""
@@ -402,13 +414,12 @@ def select_file(filename: str, category: str, subcategory: str = None):
         # Update content viewer
         content_viewer.set_content(f"```\n{content}\n```")
         
-        # Update file info
-        file_meta = notes_manager.data.get_file_metadata(filename)
+        # Update note info
         info_text = f"📄 {filename}\n"
         info_text += f"Category: {category}"
         if subcategory:
             info_text += f" / {subcategory}"
-        file_info_label.set_text(info_text)
+        note_info_label.set_text(info_text)
         
         # Show action buttons
         show_action_buttons(filename, category, subcategory)
