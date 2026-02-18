@@ -48,6 +48,7 @@ class NotesManager:
         # UI state
         self.selected_file = None
         self.search_query = ''
+        self.full_text_search = False
         self.selected_tree_node_id = None
         self.tree_nodes = []  # Store tree structure for lookups
         
@@ -225,16 +226,23 @@ def main_page():
 
 def build_left_panel():
     """Build left navigation panel."""
-    global search_input, file_tree, stats_label
+    global search_input, full_text_checkbox, file_tree, stats_label
     
     with ui.column().classes('w-full h-full p-2'):
         # Search box
-        search_input = ui.input(
-            placeholder='Search files...',
-            on_change=lambda e: on_search_change(e.value)
-        ).props('outlined dense').classes('w-full')
-        search_input.props('clearable')
-        search_input.on('keyup', lambda _: on_search_change(search_input.value))
+        with ui.row().classes('w-full items-center').style('gap: 8px'):
+            search_input = ui.input(
+                placeholder='Search files...',
+                on_change=lambda e: on_search_change(e.value)
+            ).props('outlined dense').classes('flex-1')
+            search_input.props('clearable')
+            search_input.on('keyup', lambda _: on_search_change(search_input.value))
+
+            full_text_checkbox = ui.checkbox(
+                'full text',
+                value=notes_manager.full_text_search,
+                on_change=lambda e: on_full_text_toggle(bool(e.value)),
+            ).props('dense')
         
         ui.separator()
         
@@ -391,8 +399,7 @@ def display_file_list(files: List[str], category: str, subcategory: str = None):
     original_count = len(files)
     
     # Apply search filter if active
-    if notes_manager.search_query:
-        files = notes_manager.search_engine.search_filenames(files, notes_manager.search_query)
+    files = apply_search_filter(files)
 
     logger.info(
         'Display file list: category=%s, subcategory=%s, files_total=%d, files_after_search=%d, search_query=%r',
@@ -508,11 +515,7 @@ def move_file_to_category(filename: str, from_category: str, from_subcategory: s
         pre_move_visible_files = []
         if selected_node_id:
             pre_move_visible_files = notes_manager.get_files_for_selection(selected_node_id)
-            if notes_manager.search_query:
-                pre_move_visible_files = notes_manager.search_engine.search_filenames(
-                    pre_move_visible_files,
-                    notes_manager.search_query,
-                )
+            pre_move_visible_files = apply_search_filter(pre_move_visible_files)
 
         next_candidate = None
         if filename in pre_move_visible_files:
@@ -559,11 +562,7 @@ def move_file_to_category(filename: str, from_category: str, from_subcategory: s
                 node_subcategory = selected_node.get('subcategory')
 
                 refreshed_visible_files = notes_manager.get_files_for_selection(selected_node_id)
-                if notes_manager.search_query:
-                    refreshed_visible_files = notes_manager.search_engine.search_filenames(
-                        refreshed_visible_files,
-                        notes_manager.search_query,
-                    )
+                refreshed_visible_files = apply_search_filter(refreshed_visible_files)
 
                 if filename in refreshed_visible_files:
                     select_file(filename, node_category, node_subcategory)
@@ -605,6 +604,28 @@ def on_search_change(query: str):
     tree_value = getattr(file_tree, 'value', None)
     if tree_value:
         on_tree_select(tree_value, reset_detail_panel=False)
+
+
+def on_full_text_toggle(enabled: bool):
+    """Handle toggling full text search mode."""
+    notes_manager.full_text_search = bool(enabled)
+    on_search_change(notes_manager.search_query)
+
+
+def apply_search_filter(files: List[str]) -> List[str]:
+    """Apply current search settings to file list."""
+    query = notes_manager.search_query
+    if not query:
+        return files
+
+    if notes_manager.full_text_search:
+        return notes_manager.search_engine.search_filenames_or_content(
+            files,
+            query,
+            notes_manager.file_manager.read_file_content,
+        )
+
+    return notes_manager.search_engine.search_filenames(files, query)
 
 
 def refresh_app():

@@ -1,7 +1,6 @@
 """Search functionality for files and content."""
 
-from typing import List, Set
-import re
+from typing import Callable, List
 
 
 class SearchEngine:
@@ -53,6 +52,37 @@ class SearchEngine:
                     break
         
         return snippets
+
+    @staticmethod
+    def search_filenames_or_content(
+        filenames: List[str],
+        query: str,
+        content_loader: Callable[[str], str],
+    ) -> List[str]:
+        """
+        Search filenames and file contents (case-insensitive).
+        Returns list of matching filenames.
+        """
+        if not query:
+            return filenames
+
+        query_lower = query.lower()
+        matches = []
+
+        for filename in filenames:
+            if query_lower in filename.lower():
+                matches.append(filename)
+                continue
+
+            try:
+                content = content_loader(filename)
+            except Exception:
+                content = ''
+
+            if query_lower in content.lower():
+                matches.append(filename)
+
+        return matches
     
     @staticmethod
     def filter_by_category(filenames: List[str], files_dict: dict, category: str) -> List[str]:
