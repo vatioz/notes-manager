@@ -10,6 +10,10 @@ from src.models import NotesData
 from src.json_manager import JSONManager
 from src.file_manager import FileManager
 from src.search import SearchEngine
+from src.embeddings import EmbeddingClient
+from src.vector_store import VectorStore
+from src.chunking import chunk_file
+from dotenv import load_dotenv
 
 
 logger = logging.getLogger('notes_manager')
@@ -18,6 +22,13 @@ if not logger.handlers:
         level=logging.INFO,
         format='%(asctime)s | %(levelname)s | %(name)s | %(message)s'
     )
+
+# Load environment variables from .env (if present)
+try:
+    load_dotenv()
+except Exception:
+    # If dotenv not available or .env missing, continue silently
+    pass
 
 
 ARCHIVE_CATEGORY = 'Archived'
@@ -42,15 +53,38 @@ class NotesManager:
         )
         self.search_engine = SearchEngine()
         
+        # Initialize semantic search components
+        try:
+            azure_config = self.config.get('azure_openai', {})
+            self.embedding_client = EmbeddingClient(
+                endpoint=azure_config.get('endpoint', ''),
+                deployment_name=azure_config.get('deployment_name', 'text-embedding-3-small'),
+                api_version=azure_config.get('api_version', '2024-02-01'),
+                api_key=azure_config.get('api_key')  # Falls back to env var if None
+            )
+            
+            vector_config = self.config.get('vector_store', {})
+            self.vector_store = VectorStore(
+                persist_directory=vector_config.get('persist_directory', './chroma_db'),
+                collection_name=vector_config.get('collection_name', 'notes')
+            )
+            self.semantic_search_enabled = True
+        except Exception as e:
+            logger.warning(f"Semantic search disabled: {e}")
+            self.embedding_client = None
+            self.vector_store = None
+            self.semantic_search_enabled = False
+        
         # Load data
         self.reload_data()
         
         # UI state
         self.selected_file = None
         self.search_query = ''
-        self.full_text_search = False
+        self.search_mode = 'filename'  # 'filename', 'fulltext', or 'semantic'
         self.selected_tree_node_id = None
         self.tree_nodes = []  # Store tree structure for lookups
+        # Note: unindexed_count is set by reload_data() above
         
     def load_config(self):
         """Load configuration from config.json."""
@@ -71,11 +105,21 @@ class NotesManager:
         try:
             raw_data = self.json_manager.load()
             self.data = NotesData(raw_data)
-            
+
             # Find uncategorized files
             files_in_json = set(self.data.get_all_categorized_files())
             self.uncategorized = self.file_manager.find_uncategorized_files(files_in_json)
-            
+
+            # Update unindexed file count for semantic search
+            if getattr(self, 'semantic_search_enabled', False) and getattr(self, 'vector_store', None):
+                all_files = self.file_manager.find_all_note_files()
+                unindexed = self.vector_store.get_unindexed_files(all_files)
+                self.unindexed_count = len(unindexed)
+                logger.info(f"Semantic search status: {len(all_files)} total files, {len(unindexed)} unindexed")
+            else:
+                self.unindexed_count = 0
+                logger.info("Semantic search disabled or not initialized")
+
         except Exception as e:
             ui.notify(f"Error loading data: {e}", type='negative')
             raise
@@ -226,23 +270,40 @@ def main_page():
 
 def build_left_panel():
     """Build left navigation panel."""
-    global search_input, full_text_checkbox, file_tree, stats_label
+    global search_input, search_mode_radio, file_tree, stats_label
     
     with ui.column().classes('w-full h-full p-2'):
         # Search box
-        with ui.row().classes('w-full items-center').style('gap: 8px'):
+        with ui.column().classes('w-full').style('gap: 8px'):
             search_input = ui.input(
                 placeholder='Search files...',
                 on_change=lambda e: on_search_change(e.value)
-            ).props('outlined dense').classes('flex-1')
+            ).props('outlined dense').classes('w-full')
             search_input.props('clearable')
             search_input.on('keyup', lambda _: on_search_change(search_input.value))
-
-            full_text_checkbox = ui.checkbox(
-                'full text',
-                value=notes_manager.full_text_search,
-                on_change=lambda e: on_full_text_toggle(bool(e.value)),
-            ).props('dense')
+            
+            # Search mode radio buttons - use dict for options
+            search_mode_radio = ui.radio(
+                options={'filename': 'File name', 'fulltext': 'Full text', 'semantic': 'Semantic'},
+                value=notes_manager.search_mode,
+                on_change=lambda e: on_search_mode_change(e.value)
+            ).props('inline dense').classes('text-sm')
+            
+            # Ingestion status badge and button (for semantic search)
+            if notes_manager.semantic_search_enabled:
+                with ui.row().classes('w-full items-center').style('gap: 8px'):
+                    # Always show badge with appropriate message and color
+                    badge_text = f"{notes_manager.unindexed_count} not indexed" if notes_manager.unindexed_count > 0 else "All indexed"
+                    badge_color = 'orange' if notes_manager.unindexed_count > 0 else 'green'
+                    ingestion_badge = ui.badge(badge_text, color=badge_color)
+                    
+                    # Only show index button when there are unindexed files
+                    if notes_manager.unindexed_count > 0:
+                        ingestion_button = ui.button(
+                            'Index now',
+                            icon='download',
+                            on_click=lambda: ingest_unindexed_files()
+                        ).props('flat dense size=sm')
         
         ui.separator()
         
@@ -606,9 +667,9 @@ def on_search_change(query: str):
         on_tree_select(tree_value, reset_detail_panel=False)
 
 
-def on_full_text_toggle(enabled: bool):
-    """Handle toggling full text search mode."""
-    notes_manager.full_text_search = bool(enabled)
+def on_search_mode_change(mode: str):
+    """Handle search mode change (filename, fulltext, or semantic)."""
+    notes_manager.search_mode = mode
     on_search_change(notes_manager.search_query)
 
 
@@ -618,14 +679,94 @@ def apply_search_filter(files: List[str]) -> List[str]:
     if not query:
         return files
 
-    if notes_manager.full_text_search:
+    mode = notes_manager.search_mode
+    
+    if mode == 'semantic':
+        if notes_manager.semantic_search_enabled:
+            return notes_manager.search_engine.search_semantic(
+                files,
+                query,
+                notes_manager.vector_store,
+                notes_manager.embedding_client
+            )
+        else:
+            # Fallback to filename search if semantic not available
+            ui.notify('Semantic search not available. Using filename search.', type='warning')
+            return notes_manager.search_engine.search_filenames(files, query)
+    
+    elif mode == 'fulltext':
         return notes_manager.search_engine.search_filenames_or_content(
             files,
             query,
             notes_manager.file_manager.read_file_content,
         )
+    
+    else:  # mode == 'filename'
+        return notes_manager.search_engine.search_filenames(files, query)
 
-    return notes_manager.search_engine.search_filenames(files, query)
+
+async def ingest_unindexed_files():
+    """Ingest files that are not yet in the vector database."""
+    if not notes_manager.semantic_search_enabled:
+        ui.notify('Semantic search is not enabled.', type='warning')
+        return
+    
+    try:
+        # Get unindexed files
+        all_files = notes_manager.file_manager.find_all_note_files()
+        unindexed = notes_manager.vector_store.get_unindexed_files(all_files)
+        
+        if not unindexed:
+            ui.notify('All files are already indexed.', type='info')
+            return
+        
+        file_count = len(unindexed)
+        ui.notify(f'Indexing {file_count} files...', type='info')
+        
+        # Get chunking config
+        vector_config = notes_manager.config.get('vector_store', {})
+        chunk_min = vector_config.get('chunk_min_chars', 100)
+        chunk_max = vector_config.get('chunk_max_chars', 500)
+        
+        indexed_count = 0
+        for filename in unindexed:
+            try:
+                # Read file content
+                content = notes_manager.file_manager.read_file_content(filename)
+                
+                # Chunk the file
+                chunks = chunk_file(filename, content, chunk_min, chunk_max)
+                
+                if not chunks:
+                    continue
+                
+                # Generate embeddings for all chunks
+                chunk_texts = [chunk.text for chunk in chunks]
+                embeddings = notes_manager.embedding_client.embed_texts(chunk_texts)
+                
+                # Ingest into vector store
+                notes_manager.vector_store.ingest_file(filename, chunks, embeddings)
+                indexed_count += 1
+                
+                # Update UI periodically (every 10 files)
+                if indexed_count % 10 == 0:
+                    ui.notify(f'Indexed {indexed_count}/{file_count} files...', type='info')
+                
+            except Exception as e:
+                logger.error(f"Error indexing {filename}: {e}")
+                continue
+        
+        # Update the unindexed count and reload to refresh badge
+        notes_manager.unindexed_count = 0
+        
+        ui.notify(f'Successfully indexed {indexed_count} files!', type='positive')
+        
+        # Reload data to refresh the badge display
+        notes_manager.reload_data()
+        
+    except Exception as e:
+        logger.error(f"Ingestion error: {e}")
+        ui.notify(f'Error during indexing: {e}', type='negative')
 
 
 def refresh_app():

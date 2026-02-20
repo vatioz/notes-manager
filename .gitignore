@@ -14,3 +14,10 @@ env/
 
 # Backups
 backups/
+
+# Vector database
+lancedb/
+chroma_db/
+
+# Local environment variables (do not commit)
+.env

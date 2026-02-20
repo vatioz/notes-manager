@@ -7,5 +7,16 @@
   "ui": {
     "theme": "light",
     "preview_max_lines": 100
+  },
+  "azure_openai": {
+    "endpoint": "https://ai-foundry-notes-mg.cognitiveservices.azure.com",
+    "deployment_name": "text-embedding-3-small",
+    "api_version": "2023-05-15"
+  },
+  "vector_store": {
+    "persist_directory": "./lancedb",
+    "collection_name": "notes",
+    "chunk_min_chars": 100,
+    "chunk_max_chars": 500
   }
 }
